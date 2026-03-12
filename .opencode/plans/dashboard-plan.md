@@ -12,7 +12,7 @@ and services. Two containers run on IncusOS:
   that polls NixOS machines via Prometheus Node Exporter and scrapes the Incus
   metrics endpoint. Serves a JSON API for Homepage to consume.
 
-No historical data, no database. Current-state only with offline detection.
+No historical data, no database. The backend acts as a translation layer, performing math on raw metrics before serving them. Current-state only with 3-tier offline detection.
 All communication over Tailscale. No public internet exposure.
 
 ## 2. Architecture
@@ -42,9 +42,9 @@ All communication over Tailscale. No public internet exposure.
   |    -> Incus metrics endpoint (TLS cert, every 5 min)              |
   |                                                                   |
   |  In-memory state:                                                 |
-  |    Latest metrics per machine                                     |
-  |    Online/offline status + last_seen timestamp                    |
-  |    Offline = 3 consecutive failed polls                           |
+  |    Latest translated metrics per machine                          |
+  |    Online/unreachable/offline status + last_seen timestamp        |
+  |    Immediate asynchronous poll on startup (fixes cold start)      |
   |                                                                   |
   |  Mounts:                                                          |
   |    /secrets/  <- read-only (TLS cert/key, Basic Auth creds)       |
@@ -102,9 +102,9 @@ All communication over Tailscale. No public internet exposure.
 | Borg backup status      | `textfile` (borgmatic output dumped via script)               |
 | NixOS generation        | `textfile` (readlink /nix/var/nix/profiles/system)            |
 
-The Go backend parses whatever Prometheus metrics each node-exporter returns and
-serves them as structured JSON. No hardcoded metric names in Go code — new
-metrics from textfile collectors appear automatically in the API response.
+The Go backend acts as a smart translator. Instead of passing raw Prometheus strings,
+Go will parse the Prometheus text format and calculate exact frontend-ready values
+(e.g., `disk_used_percent`, `uptime_hours`). The JSON output will be clean and nested.
 
 ### Nextcloud (Homepage built-in widget, direct)
 
@@ -158,16 +158,18 @@ Response format for `/api/v1/status`:
       "status": "online",
       "last_seen": "2026-03-12T10:30:00Z",
       "metrics": {
-        "node_time_seconds": 1741776600,
-        "node_boot_time_seconds": 1741000000,
-        "node_filesystem_avail_bytes{mountpoint=\"/\"}": 50000000000
+        "uptime_hours": 215.4,
+        "disk_used_percent": 45.2
       }
     },
     "server-02": {
       "type": "nixos",
-      "status": "offline",
+      "status": "unreachable",
       "last_seen": "2026-03-12T09:15:00Z",
-      "metrics": {}
+      "metrics": {
+        "uptime_hours": 42.1,
+        "disk_used_percent": 88.0
+      }
     }
   },
   "incus": {
@@ -249,13 +251,15 @@ interval_minutes = 5
 [[nixos]]
 hostname = "server-01"
 url = "http://server-01.tailnet-name.ts.net:9100/metrics"
-auth_file = "/secrets/node-exporter-auth"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
 interval_minutes = 5
 
 [[nixos]]
 hostname = "server-02"
 url = "http://server-02.tailnet-name.ts.net:9100/metrics"
-auth_file = "/secrets/node-exporter-auth"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
 interval_minutes = 5
 ```
 
@@ -298,7 +302,7 @@ interval_minutes = 5
 
   services.dashboard-agent = {
     enable = true;
-    basicAuthFile = config.sops.secrets."node-exporter-auth".path;
+    basicAuthPasswordFile = config.age.secrets."node-exporter-pass".path;
     customChecks = {
       smart = true;
       borgJobs = [ "default" ];
@@ -307,17 +311,21 @@ interval_minutes = 5
 }
 ```
 
-Secrets managed via `sops-nix` or `agenix`, referenced by path under
-`/run/secrets/`.
+Secrets managed via `agenix`, templating the `web.config.file` for node-exporter basic auth.
 
-## 9. Offline Detection
+## 9. Offline Detection & State Management
 
-The Go backend tracks consecutive poll failures per machine:
+The Go backend maintains a state machine and tracks consecutive poll failures per machine:
 
-- After **3 consecutive failures**: status changes to `"offline"`
-- The `last_seen` timestamp preserves the time of the last successful poll
-- Homepage displays this as "Offline" via the status field
-- On next successful poll: immediately returns to `"online"`
+- **`online`**: The last poll was successful.
+- **`unreachable`**: 1 or 2 consecutive polls have failed.
+- **`offline`**: 3 consecutive polls have failed.
+
+**Stale Data Handling:** 
+If a host transitions to `unreachable` or `offline`, the API will *keep* serving the last known `metrics` object but will update the `status` field and maintain the `last_seen` timestamp so Homepage users know the data is old.
+
+**Cold Start:** 
+When the `dashboard-api` container starts, it executes an immediate asynchronous poll of all targets before falling back to the 5-minute ticker, ensuring data is populated immediately.
 
 ## 10. HTTP Client Resilience
 
@@ -340,34 +348,18 @@ Log levels:
 
 ## 12. Build & Deploy
 
-### Zero-Downtime Deploy Script
+### Deploy Script
 
 ```bash
 nix build .#dashboard-api-image
 incus image import ./result --alias dashboard-api-new
 
-# Launch new container with a temporary name
-incus launch dashboard-api-new dashboard-api-tmp \
-  --device secrets,source=/path/to/secrets ...
-
-# Health check (wait for API to respond)
-for i in $(seq 1 30); do
-  curl -sf http://dashboard-api-tmp:8080/api/v1/status && break
-  sleep 1
-done
-
-# Swap
-incus stop dashboard-api && incus rm dashboard-api
-incus rename dashboard-api-tmp dashboard-api
-
-# Clean up old image
-incus image delete dashboard-api-old 2>/dev/null
-incus image alias rename dashboard-api-new dashboard-api-old
+incus stop dashboard-api
+# Rebuild/Launch container from new image here
+incus start dashboard-api
 ```
 
-Note: This deploy script is illustrative. Incus rename semantics and device
-re-attachment will need validation against actual Incus behavior. The principle
-(launch new, health check, swap) is sound.
+Note: This deploy script is a simplified approach, embracing the fact that the Go backend boots in milliseconds. Homepage will gracefully handle a 1-2 second API outage.
 
 ### Agent Updates
 

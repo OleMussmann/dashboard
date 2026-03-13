@@ -36,10 +36,16 @@ All communication over Tailscale. No public internet exposure.
   |  Server:                                                          |
   |    GET /api/v1/status            <- all NixOS + Incus metrics     |
   |    GET /api/v1/status/:hostname  <- single machine metrics        |
+  |    GET /healthz                  <- health check                  |
   |                                                                   |
   |  Collector (internal scheduler):                                  |
   |    -> NixOS Node Exporters (Basic Auth, every 5 min)              |
   |    -> Incus metrics endpoint (TLS cert, every 5 min)              |
+  |                                                                   |
+  |  Alerter:                                                         |
+  |    -> ntfy.sh webhook for critical events                         |
+  |    -> Per-machine criticality config (critical vs. non-critical)  |
+  |    -> Cooldown timer to prevent notification spam                 |
   |                                                                   |
   |  In-memory state:                                                 |
   |    Latest translated metrics per machine                          |
@@ -60,6 +66,7 @@ All communication over Tailscale. No public internet exposure.
 | Nextcloud        | Poll (Homepage direct)    | HTTPS (public)          | NC-Token (in Homepage config)        |
 | Home Assistant   | Poll (Homepage direct)    | Tailscale               | Long-lived token (in Homepage config)|
 | Open-Meteo       | Poll (Homepage direct)    | HTTPS (public)          | None                                 |
+| ntfy.sh          | Push (Go backend)         | HTTPS (public)          | ntfy topic (in config)               |
 
 ### Design Decisions & Rationale
 
@@ -88,6 +95,9 @@ All communication over Tailscale. No public internet exposure.
   NixOS uses Basic Auth scoped to the exporter.
 - **No heavy frameworks**: No Prometheus server, no Grafana, no InfluxDB.
   Homepage + a small Go binary handle exactly what is needed.
+- **No CORS required**: Homepage's `customapi` widget fetches data server-side
+  through its Node.js backend proxy. The browser never contacts the Go API
+  directly, so no CORS headers are needed.
 
 ## 3. Monitored Systems & Metrics
 
@@ -97,14 +107,21 @@ All communication over Tailscale. No public internet exposure.
 |-------------------------|---------------------------------------------------------------|
 | Online/offline status   | Success/failure of HTTP scrape (offline after 3 failures)     |
 | Uptime                  | `node_time_seconds` - `node_boot_time_seconds`                |
+| CPU & RAM usage         | `node_load1` & (`node_memory_MemTotal_bytes` - `_MemAvailable_bytes`) |
 | Disk usage (all mounts) | `node_filesystem_avail_bytes` / `_size_bytes`                 |
 | SMART disk health       | `textfile` (smartctl dumped via systemd timer)                |
+| ZFS / BTRFS health      | `node_zfs_zpool_state` (or btrfs equivalent)                  |
+| Hardware temperatures   | `node_hwmon_temp_celsius`                                     |
+| Failed systemd services | `systemd` collector (Note: tune flags later, e.g. `--collector.systemd.unit-include`, to limit scope and avoid heavy scrapes) |
+| OOM kills               | `node_vmstat_oom_kill`                                        |
 | Borg backup status      | `textfile` (borgmatic output dumped via script)               |
 | NixOS generation        | `textfile` (readlink /nix/var/nix/profiles/system)            |
+| Reboot required         | `textfile` (compare running profile `/run/current-system` vs installed profile `/nix/var/nix/profiles/system`) |
 
 The Go backend acts as a smart translator. Instead of passing raw Prometheus strings,
 Go will parse the Prometheus text format and calculate exact frontend-ready values
-(e.g., `disk_used_percent`, `uptime_hours`). The JSON output will be clean and nested.
+(e.g., `disk_used_percent`, `uptime_hours`, `ram_used_percent`). The JSON output
+will be clean and nested.
 
 ### Nextcloud (Homepage built-in widget, direct)
 
@@ -147,6 +164,10 @@ depend on the Incus version.
 |--------|----------------------------|---------------------------------------|
 | GET    | `/api/v1/status`           | All NixOS machines + Incus metrics    |
 | GET    | `/api/v1/status/:hostname` | Single machine metrics                |
+| GET    | `/healthz`                 | Health check (returns 200 if running) |
+
+The `/healthz` endpoint can be used by Incus for container health checks and by
+Homepage's `siteMonitor` widget to show whether the API itself is up.
 
 Response format for `/api/v1/status`:
 
@@ -159,7 +180,17 @@ Response format for `/api/v1/status`:
       "last_seen": "2026-03-12T10:30:00Z",
       "metrics": {
         "uptime_hours": 215.4,
-        "disk_used_percent": 45.2
+        "cpu_load_1m": 0.42,
+        "ram_used_percent": 61.3,
+        "disk_used_percent": 45.2,
+        "smart_healthy": true,
+        "failed_services": [],
+        "oom_kills": 0,
+        "reboot_required": false,
+        "nixos_generation": 187,
+        "temperatures": {
+          "coretemp_core_0": 52.0
+        }
       }
     },
     "server-02": {
@@ -168,15 +199,42 @@ Response format for `/api/v1/status`:
       "last_seen": "2026-03-12T09:15:00Z",
       "metrics": {
         "uptime_hours": 42.1,
-        "disk_used_percent": 88.0
+        "cpu_load_1m": 1.85,
+        "ram_used_percent": 88.0,
+        "disk_used_percent": 88.0,
+        "smart_healthy": true,
+        "failed_services": ["wg-quick-wg0.service"],
+        "oom_kills": 0,
+        "reboot_required": true,
+        "nixos_generation": 142,
+        "temperatures": {}
       }
     }
   },
   "incus": {
     "status": "online",
     "last_seen": "2026-03-12T10:30:00Z",
-    "metrics": {
-      "incus_instance_info{name=\"homepage\",status=\"Running\"}": 1
+    "instances": {
+      "homepage": {
+        "status": "Running",
+        "cpu_seconds": 1842.5,
+        "memory_bytes": 268435456,
+        "disk_bytes": 524288000,
+        "network_rx_bytes": 10485760,
+        "network_tx_bytes": 5242880
+      },
+      "dashboard-api": {
+        "status": "Running",
+        "cpu_seconds": 42.1,
+        "memory_bytes": 16777216,
+        "disk_bytes": 10485760,
+        "network_rx_bytes": 2097152,
+        "network_tx_bytes": 1048576
+      }
+    },
+    "host": {
+      "cpu_seconds": 98234.5,
+      "memory_bytes": 17179869184
     }
   }
 }
@@ -192,13 +250,14 @@ Homepage's `customapi` widget maps JSON paths to display fields
 | Frontend         | Homepage (gethomepage.dev)      | Native NC/HA/weather widgets, customapi       |
 | Backend language | Go                              | Memory safe, fast concurrency, static binary  |
 | HTTP framework   | `net/http`                      | Standard library, zero deps                   |
-| HTTP client      | `net/http` with timeouts        | Per-request 10s timeout, concurrency limit    |
+| HTTP client      | `net/http` with timeouts        | Per-request 10s context timeout               |
 | Prom parser      | `prometheus/common/expfmt`      | Standard Prometheus text format parser         |
 | Container (API)  | scratch (OCI image)             | Static binary, ~10MB, nothing to attack       |
 | Container (UI)   | Homepage official image         | Docker image, ~200MB                          |
 | Build system     | Nix flake                       | Reproducible, handles static Go compilation   |
 | NixOS agent      | `prometheus-node-exporter`      | Standard, reliable, extensible via textfile   |
 | Logging          | `log/slog` (structured, stdout) | Standard library, container-friendly          |
+| Alerting         | ntfy.sh                         | Simple HTTP POST, no dependencies, mobile app |
 
 ## 6. Project Structure
 
@@ -214,10 +273,11 @@ dashboard/
 │       └── main.go               # Entry: start server + scheduler
 ├── internal/
 │   ├── config/                   # Load TOML config
-│   ├── server/                   # HTTP handlers (status endpoint)
+│   ├── server/                   # HTTP handlers (status, healthz)
 │   ├── collector/
 │   │   ├── nodeexporter.go       # Parse Prometheus text from node-exporters
 │   │   └── incus.go              # Parse Prometheus text from Incus metrics
+│   ├── alerter/                  # ntfy.sh webhook, cooldown logic
 │   └── scheduler/                # Runs collectors on interval, tracks state
 │
 ├── nix/
@@ -241,27 +301,63 @@ dashboard/
 ```toml
 [server]
 listen = "0.0.0.0:8080"
+poll_interval_minutes = 5          # Global default for all targets
 
 [incus]
 url = "https://incus-host.tailnet-name.ts.net:8443"
 cert_file = "/secrets/metrics.crt"
 key_file = "/secrets/metrics.key"
-interval_minutes = 5
+
+[alerting]
+enabled = true
+ntfy_url = "https://ntfy.sh/your-dashboard-topic"
+cooldown_minutes = 15              # Minimum time between alerts for the same host/event
+
+# Alert rules: which conditions trigger a push notification.
+# Each rule can be toggled independently.
+[alerting.rules]
+machine_offline = true             # A critical machine transitions to "offline"
+smart_failure = true               # SMART reports unhealthy disk
+oom_kill = true                    # OOM kill detected (delta > 0 between polls)
+high_disk_usage_percent = 90       # Disk usage exceeds threshold (0 = disabled)
+failed_services = true             # Any systemd unit in failed state
+borg_stale_hours = 48              # Borg backup older than threshold (0 = disabled)
 
 [[nixos]]
 hostname = "server-01"
 url = "http://server-01.tailnet-name.ts.net:9100/metrics"
 username = "metrics"
 password_file = "/secrets/node-exporter-pass"
-interval_minutes = 5
+critical = true                    # Alerts fire for this machine
 
 [[nixos]]
 hostname = "server-02"
 url = "http://server-02.tailnet-name.ts.net:9100/metrics"
 username = "metrics"
 password_file = "/secrets/node-exporter-pass"
-interval_minutes = 5
+critical = true
+
+[[nixos]]
+hostname = "laptop"
+url = "http://laptop.tailnet-name.ts.net:9100/metrics"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
+critical = false                   # No offline alerts; expected to be off often
+
+[[nixos]]
+hostname = "desktop"
+url = "http://desktop.tailnet-name.ts.net:9100/metrics"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
+critical = false                   # No offline alerts; expected to be off often
 ```
+
+The `critical` flag on each machine controls whether offline transitions
+trigger alerts. Non-critical machines (laptops, desktops) are still monitored
+and displayed on the dashboard, but going offline will not fire a notification.
+Alert rules like `smart_failure` or `failed_services` still apply to all
+machines regardless of the `critical` flag, since hardware failures and broken
+services are always worth knowing about.
 
 ### Homepage (services.yaml excerpt)
 
@@ -321,20 +417,38 @@ The Go backend maintains a state machine and tracks consecutive poll failures pe
 - **`unreachable`**: 1 or 2 consecutive polls have failed.
 - **`offline`**: 3 consecutive polls have failed.
 
-**Stale Data Handling:** 
+**Stale Data Handling:**
 If a host transitions to `unreachable` or `offline`, the API will *keep* serving the last known `metrics` object but will update the `status` field and maintain the `last_seen` timestamp so Homepage users know the data is old.
 
-**Cold Start:** 
-When the `dashboard-api` container starts, it executes an immediate asynchronous poll of all targets before falling back to the 5-minute ticker, ensuring data is populated immediately.
+**Cold Start:**
+When the `dashboard-api` container starts, it executes an immediate asynchronous poll of all targets before falling back to the regular ticker, ensuring data is populated immediately.
+
+**Active Alerting:**
+The Go backend integrates a lightweight webhook (via `ntfy.sh`) to send push
+notifications for critical events. Alerting behavior is fully configurable:
+
+- **Per-machine criticality**: Each machine is marked `critical = true/false` in the
+  config. Non-critical machines (laptops, desktops that are expected to be offline
+  often) will not trigger offline alerts but are still displayed on the dashboard.
+- **Alert rules**: Each alert condition (offline, SMART failure, OOM kill, high disk,
+  failed services, stale backups) can be independently enabled/disabled with
+  configurable thresholds where applicable.
+- **Cooldown**: A configurable cooldown period (default 15 minutes) prevents repeated
+  notifications for the same host and event type. The cooldown is tracked per
+  (hostname, event) pair in memory.
+- **Scope**: The `critical` flag only controls offline alerts. Hardware and service
+  alerts (SMART, OOM, failed units) fire for all machines regardless of criticality,
+  since these indicate real problems even on non-critical hosts.
 
 ## 10. HTTP Client Resilience
 
-- **Per-request timeout**: 10 seconds (prevents one hanging machine from
-  blocking the scheduler)
+- **Per-request timeout**: 10 seconds via `context.WithTimeout` on every outbound
+  HTTP request. Prevents one hanging machine (e.g., a Tailscale node blackholing
+  traffic) from blocking the scheduler or exhausting the concurrency semaphore.
 - **Concurrency limit**: Semaphore of 5 concurrent polls (prevents
-  thundering-herd on startup)
+  thundering-herd on startup).
 - **No retry/backoff**: Failed polls increment the failure counter; the next
-  scheduled poll is the retry
+  scheduled poll is the retry.
 
 ## 11. Logging
 
@@ -343,12 +457,12 @@ captures logs.
 
 Log levels:
 - `INFO`: Successful polls, server startup
-- `WARN`: Failed polls, offline transitions
+- `WARN`: Failed polls, offline transitions, alerts sent
 - `ERROR`: Configuration errors, unrecoverable failures
 
 ## 12. Build & Deploy
 
-### Deploy Script
+### Go API Backend
 
 ```bash
 nix build .#dashboard-api-image
@@ -360,6 +474,31 @@ incus start dashboard-api
 ```
 
 Note: This deploy script is a simplified approach, embracing the fact that the Go backend boots in milliseconds. Homepage will gracefully handle a 1-2 second API outage.
+
+### Secrets Mount
+
+The Go API container requires read-only access to TLS certificates and Basic Auth
+credentials. Mount the secrets directory into the container:
+
+```bash
+incus config device add dashboard-api secrets disk source=/path/to/secrets path=/secrets readonly=true
+```
+
+### Homepage Container Configuration & Updates
+
+Homepage runs as an OCI Docker container in Incus. To ensure configurations (`services.yaml`, `widgets.yaml`, etc.) survive container rebuilds, the `homepage/` directory must be mounted as a disk device into the container:
+
+```bash
+incus config device add homepage config disk source=/absolute/path/to/dashboard/homepage path=/app/config
+```
+
+To update the Homepage container to the latest image layer without losing configurations:
+
+```bash
+incus stop homepage
+incus rebuild docker:ghcr.io/gethomepage/homepage:latest homepage
+incus start homepage
+```
 
 ### Agent Updates
 

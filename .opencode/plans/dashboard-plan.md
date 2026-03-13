@@ -263,6 +263,8 @@ Homepage's `customapi` widget maps JSON paths to display fields
 
 ```
 dashboard/
+├── .gitignore                    # VCS ignore rules
+├── README.md                     # Project overview, setup & maintenance
 ├── flake.nix                     # Nix flake: Go binary + OCI image + NixOS module
 ├── flake.lock
 ├── go.mod

@@ -1,0 +1,27 @@
+# Build output
+/result
+/result-*
+
+# Go
+/dashboard-api
+
+# Secrets (never commit)
+*.key
+*.crt
+*.pem
+secrets/
+config.toml
+
+# Nix
+.direnv/
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

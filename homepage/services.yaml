@@ -1,0 +1,61 @@
+# Homepage service definitions
+# See https://gethomepage.dev/configs/services/
+# Update hostnames and URLs to match your environment.
+
+- Infrastructure:
+    - server-01:
+        icon: si-nixos
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status/server-01
+          mappings:
+            - field: status
+              label: Status
+            - field: metrics.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: metrics.disk_used_percent
+              label: Disk
+              format: percent
+
+    - server-02:
+        icon: si-nixos
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status/server-02
+          mappings:
+            - field: status
+              label: Status
+            - field: metrics.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: metrics.disk_used_percent
+              label: Disk
+              format: percent
+
+- Services:
+    - Nextcloud:
+        icon: nextcloud
+        href: https://cloud.example.com
+        siteMonitor: https://cloud.example.com
+        widget:
+          type: nextcloud
+          url: https://cloud.example.com
+          key: "{{HOMEPAGE_VAR_NC_TOKEN}}"
+
+    - Home Assistant:
+        icon: home-assistant
+        href: http://homeassistant.tailnet-name.ts.net:8123
+        siteMonitor: http://homeassistant.tailnet-name.ts.net:8123
+        widget:
+          type: homeassistant
+          url: http://homeassistant.tailnet-name.ts.net:8123
+          key: "{{HOMEPAGE_VAR_HA_TOKEN}}"
+
+- Monitoring:
+    - Dashboard API:
+        icon: mdi-api
+        siteMonitor: http://dashboard-api:8080/healthz
+        description: Backend health

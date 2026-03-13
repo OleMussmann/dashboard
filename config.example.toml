@@ -1,0 +1,53 @@
+# Dashboard API configuration
+# Copy to config.toml and edit for your environment.
+# Do NOT commit config.toml (it may contain secrets).
+
+[server]
+listen = "0.0.0.0:8080"
+poll_interval_minutes = 5          # How often to scrape all targets
+
+[incus]
+url = "https://incus-host.tailnet-name.ts.net:8443"
+cert_file = "/secrets/metrics.crt"
+key_file = "/secrets/metrics.key"
+
+[alerting]
+enabled = true
+ntfy_url = "https://ntfy.sh/your-dashboard-topic"
+cooldown_minutes = 15              # Min time between alerts for same host/event
+
+[alerting.rules]
+machine_offline = true             # Critical machine transitions to "offline"
+smart_failure = true               # SMART reports unhealthy disk
+oom_kill = true                    # OOM kill detected (delta > 0 between polls)
+high_disk_usage_percent = 90       # Disk usage exceeds threshold (0 = disabled)
+failed_services = true             # Any systemd unit in failed state
+borg_stale_hours = 48              # Borg backup older than threshold (0 = disabled)
+
+# Add one [[nixos]] block per monitored NixOS machine.
+# Machines with critical = true will trigger offline alerts.
+# Machines with critical = false (laptops, desktops) are still monitored
+# and displayed, but going offline will not fire a notification.
+# Hardware/service alerts (SMART, OOM, failed units) fire for all machines.
+
+[[nixos]]
+hostname = "server-01"
+url = "http://server-01.tailnet-name.ts.net:9100/metrics"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
+critical = true
+
+[[nixos]]
+hostname = "server-02"
+url = "http://server-02.tailnet-name.ts.net:9100/metrics"
+username = "metrics"
+password_file = "/secrets/node-exporter-pass"
+critical = true
+
+# Example non-critical machine (no offline alerts):
+# [[nixos]]
+# hostname = "laptop"
+# url = "http://laptop.tailnet-name.ts.net:9100/metrics"
+# username = "metrics"
+# password_file = "/secrets/node-exporter-pass"
+# critical = false

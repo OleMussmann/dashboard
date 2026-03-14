@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.toml", "path to TOML config file")
+	configPath := flag.String("config", "/config/config.toml", "path to TOML config file")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{

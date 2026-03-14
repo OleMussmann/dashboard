@@ -36,6 +36,7 @@
               gopls
               gotools
               go-tools # staticcheck
+              incus
             ];
 
             shellHook = ''

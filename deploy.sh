@@ -3,7 +3,7 @@
 # Usage: ./deploy.sh
 set -euo pipefail
 
-echo "==> Building dashboard-api OCI image..."
+echo "==> Building dashboard-api image..."
 nix build .#dashboard-api-image
 
 echo "==> Importing image into Incus..."

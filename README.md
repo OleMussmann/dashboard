@@ -16,6 +16,9 @@ Tailscale.
 ## Prerequisites
 
 - NixOS host (for development and agent deployment)
+- Incus client >= 6.1 (for OCI remote support). The dev shell (`nix develop`)
+  provides a current client. If your system has an older version (e.g., 6.0.x
+  LTS), make sure to run Incus commands from inside the dev shell.
 - Incus on the target host (IncusOS)
 - Tailscale network connecting all machines
 - `agenix` for secrets management in your NixOS configurations
@@ -193,8 +196,16 @@ Edit `homepage/widgets.yaml`:
 - Set your latitude/longitude and timezone
 
 You will also need:
-- A Nextcloud Serverinfo API token (from NC admin settings)
-- A Home Assistant long-lived access token (from your HA profile page)
+- A **Nextcloud Serverinfo API token**. This cannot be generated from the
+  web UI. On your Nextcloud server, run:
+  ```bash
+  openssl rand -hex 32
+  ```
+  Then set the token via `occ`:
+  ```bash
+  occ config:app:set serverinfo token --value <generated_token_value>
+  ```
+- A **Home Assistant long-lived access token** (from your HA profile page)
 
 Push the homepage config files into the `homepage-config` storage volume:
 
@@ -211,21 +222,51 @@ Build the dashboard-api image locally, import it into the remote, then create
 both containers with the storage volumes attached.
 
 ```bash
-# Build the OCI image locally
+# Build the image (produces an Incus-native tarball)
 nix build .#dashboard-api-image
 
 # Import the image into the (default) remote Incus server
 incus image import ./result --alias dashboard-api
 
-# Dashboard API container
-incus launch dashboard-api dashboard-api
+# Dashboard API container (use init, not launch, so volumes are
+# attached before the first start)
+incus init dashboard-api dashboard-api
 incus storage volume attach local dashboard-secrets dashboard-api /secrets
 incus storage volume attach local dashboard-config dashboard-api /config
+incus start dashboard-api
 
-# Homepage container
-incus launch docker:ghcr.io/gethomepage/homepage:latest homepage
+# Add the GitHub Container Registry OCI remote (one-time setup)
+incus remote add ghcr https://ghcr.io --protocol=oci
+
+# Homepage container (use init so we can configure before first start)
+incus init ghcr:gethomepage/homepage:latest homepage
 incus storage volume attach local homepage-config homepage /app/config
+
+# Allow the IncusOS Tailscale hostname to pass Homepage's host validation
+incus config set homepage environment.HOMEPAGE_ALLOWED_HOSTS=incusos.tail2c589.ts.net:3000
+
+incus start homepage
 ```
+
+### 9. Set up networking (port forwarding)
+
+The containers sit on an Incus bridge network. To reach them from Tailscale,
+add proxy devices that forward ports from the IncusOS host into the
+containers:
+
+```bash
+# Homepage (port 3000)
+incus config device add homepage proxy-http proxy \
+  listen=tcp:0.0.0.0:3000 connect=tcp:127.0.0.1:3000
+
+# Dashboard API (port 8080) — optional, only needed for direct access;
+# Homepage reaches it via the Incus bridge (http://dashboard-api.incus:8080)
+incus config device add dashboard-api proxy-http proxy \
+  listen=tcp:0.0.0.0:8080 connect=tcp:127.0.0.1:8080
+```
+
+You can now access Homepage at `http://incusos.tail2c589.ts.net:3000` from
+any machine on your Tailnet.
 
 Verify the API is running:
 
@@ -255,7 +296,7 @@ Run with a config file:
 
 ## Build & Deploy
 
-### Build the OCI image
+### Build the image
 
 ```bash
 nix build .#dashboard-api-image
@@ -263,14 +304,10 @@ nix build .#dashboard-api-image
 
 ### Deploy the Go API container
 
-```bash
-# Import the image into Incus
-incus image import ./result --alias dashboard-api-new
+For day-to-day deploys, use the deploy script:
 
-# Recreate the container
-incus stop dashboard-api
-incus rebuild dashboard-api-new dashboard-api
-incus start dashboard-api
+```bash
+./deploy.sh
 ```
 
 The Go binary boots in milliseconds. Homepage handles the brief API outage
@@ -280,7 +317,7 @@ gracefully.
 
 ```bash
 incus stop homepage
-incus rebuild docker:ghcr.io/gethomepage/homepage:latest homepage
+incus rebuild ghcr:gethomepage/homepage:latest homepage
 incus start homepage
 ```
 

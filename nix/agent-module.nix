@@ -39,136 +39,140 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    # Ensure textfile directory exists.
-    systemd.tmpfiles.rules = [
-      "d ${cfg.textfileDir} 0755 root root -"
-    ];
-
-    # Node Exporter with Basic Auth and systemd collector.
-    services.prometheus.exporters.node = {
-      enable = true;
-      port = cfg.listenPort;
-      enabledCollectors = [
-        "systemd"
-        "textfile"
-      ];
-      extraFlags = [
-        "--collector.textfile.directory=${cfg.textfileDir}"
-        # Note: tune --collector.systemd.unit-include later to limit scope.
-      ];
-    };
-
-    # Generate Basic Auth web config for node-exporter.
-    # The password file is expected to contain a bcrypt hash.
-    systemd.services.prometheus-node-exporter.serviceConfig.ExecStartPre =
-      let
-        webConfigFile = pkgs.writeText "web-config.yml" ''
-          basic_auth_users:
-            metrics: PLACEHOLDER
-        '';
-        script = pkgs.writeShellScript "gen-node-exporter-auth" ''
-          PASS=$(cat ${cfg.basicAuthPasswordFile})
-          ${pkgs.gnused}/bin/sed "s|PLACEHOLDER|$PASS|" ${webConfigFile} > /run/prometheus-node-exporter/web-config.yml
-        '';
-      in
-      [
-        "+${pkgs.coreutils}/bin/mkdir -p /run/prometheus-node-exporter"
-        "+${script}"
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      # Ensure textfile directory exists.
+      systemd.tmpfiles.rules = [
+        "d ${cfg.textfileDir} 0755 root root -"
       ];
 
-    # SMART health textfile script.
-    systemd.services.dashboard-smart-check = lib.mkIf cfg.customChecks.smart {
-      description = "Dump SMART health to node-exporter textfile";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = pkgs.writeShellScript "smart-check" ''
-          OUTPUT="${cfg.textfileDir}/smart.prom"
-          echo "# HELP node_smart_healthy SMART health status (1=healthy, 0=failing)" > "$OUTPUT.tmp"
-          echo "# TYPE node_smart_healthy gauge" >> "$OUTPUT.tmp"
-          healthy=1
-          for disk in $(${pkgs.util-linux}/bin/lsblk -dnp -o NAME,TYPE | ${pkgs.gawk}/bin/awk '$2=="disk"{print $1}'); do
-            result=$(${pkgs.smartmontools}/bin/smartctl -H "$disk" 2>/dev/null | grep -c "PASSED" || true)
-            if [ "$result" -eq 0 ]; then
-              healthy=0
-            fi
-          done
-          echo "node_smart_healthy $healthy" >> "$OUTPUT.tmp"
-          mv "$OUTPUT.tmp" "$OUTPUT"
-        '';
+      # Node Exporter with Basic Auth and systemd collector.
+      services.prometheus.exporters.node = {
+        enable = true;
+        port = cfg.listenPort;
+        enabledCollectors = [
+          "systemd"
+          "textfile"
+        ];
+        extraFlags = [
+          "--collector.textfile.directory=${cfg.textfileDir}"
+          # Note: tune --collector.systemd.unit-include later to limit scope.
+        ];
       };
-    };
 
-    systemd.timers.dashboard-smart-check = lib.mkIf cfg.customChecks.smart {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "2min";
-        OnUnitActiveSec = "5min";
-      };
-    };
+      # Generate Basic Auth web config for node-exporter.
+      # The password file is expected to contain a bcrypt hash.
+      systemd.services.prometheus-node-exporter.serviceConfig.ExecStartPre =
+        let
+          webConfigFile = pkgs.writeText "web-config.yml" ''
+            basic_auth_users:
+              metrics: PLACEHOLDER
+          '';
+          script = pkgs.writeShellScript "gen-node-exporter-auth" ''
+            PASS=$(cat ${cfg.basicAuthPasswordFile})
+            ${pkgs.gnused}/bin/sed "s|PLACEHOLDER|$PASS|" ${webConfigFile} > /run/prometheus-node-exporter/web-config.yml
+          '';
+        in
+        [
+          "+${pkgs.coreutils}/bin/mkdir -p /run/prometheus-node-exporter"
+          "+${script}"
+        ];
 
-    # NixOS generation + reboot-required textfile script.
-    systemd.services.dashboard-nixos-info = {
-      description = "Dump NixOS generation info to node-exporter textfile";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = pkgs.writeShellScript "nixos-info" ''
-          OUTPUT="${cfg.textfileDir}/nixos.prom"
-          echo "# HELP node_nixos_generation Current NixOS system generation number" > "$OUTPUT.tmp"
-          echo "# TYPE node_nixos_generation gauge" >> "$OUTPUT.tmp"
-          gen=$(readlink /nix/var/nix/profiles/system | ${pkgs.gnugrep}/bin/grep -oP '\d+' | tail -1)
-          echo "node_nixos_generation ''${gen:-0}" >> "$OUTPUT.tmp"
-
-          echo "# HELP node_reboot_required Whether a reboot is needed (1=yes, 0=no)" >> "$OUTPUT.tmp"
-          echo "# TYPE node_reboot_required gauge" >> "$OUTPUT.tmp"
-          current=$(readlink /run/current-system)
-          installed=$(readlink /nix/var/nix/profiles/system)
-          if [ "$current" != "$installed" ]; then
-            echo "node_reboot_required 1" >> "$OUTPUT.tmp"
-          else
-            echo "node_reboot_required 0" >> "$OUTPUT.tmp"
-          fi
-          mv "$OUTPUT.tmp" "$OUTPUT"
-        '';
-      };
-    };
-
-    systemd.timers.dashboard-nixos-info = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "1min";
-        OnUnitActiveSec = "5min";
-      };
-    };
-
-    # Borg backup status textfile script (one per configured job).
-    systemd.services = lib.listToAttrs (map (job: {
-      name = "dashboard-borg-${job}";
-      value = {
-        description = "Dump Borg backup status for job ${job} to node-exporter textfile";
+      # SMART health textfile script.
+      systemd.services.dashboard-smart-check = lib.mkIf cfg.customChecks.smart {
+        description = "Dump SMART health to node-exporter textfile";
         serviceConfig = {
           Type = "oneshot";
-          ExecStart = pkgs.writeShellScript "borg-check-${job}" ''
-            OUTPUT="${cfg.textfileDir}/borg_${job}.prom"
-            echo "# HELP node_borg_last_backup_timestamp_seconds Unix timestamp of last successful Borg backup" > "$OUTPUT.tmp"
-            echo "# TYPE node_borg_last_backup_timestamp_seconds gauge" >> "$OUTPUT.tmp"
-            ts=$(${pkgs.borgbackup}/bin/borg list --last 1 --format '{time:%s}' 2>/dev/null || echo "0")
-            echo "node_borg_last_backup_timestamp_seconds{job=\"${job}\"} $ts" >> "$OUTPUT.tmp"
+          ExecStart = pkgs.writeShellScript "smart-check" ''
+            OUTPUT="${cfg.textfileDir}/smart.prom"
+            echo "# HELP node_smart_healthy SMART health status (1=healthy, 0=failing)" > "$OUTPUT.tmp"
+            echo "# TYPE node_smart_healthy gauge" >> "$OUTPUT.tmp"
+            healthy=1
+            for disk in $(${pkgs.util-linux}/bin/lsblk -dnp -o NAME,TYPE | ${pkgs.gawk}/bin/awk '$2=="disk"{print $1}'); do
+              result=$(${pkgs.smartmontools}/bin/smartctl -H "$disk" 2>/dev/null | grep -c "PASSED" || true)
+              if [ "$result" -eq 0 ]; then
+                healthy=0
+              fi
+            done
+            echo "node_smart_healthy $healthy" >> "$OUTPUT.tmp"
             mv "$OUTPUT.tmp" "$OUTPUT"
           '';
         };
       };
-    }) cfg.customChecks.borgJobs);
 
-    systemd.timers = lib.listToAttrs (map (job: {
-      name = "dashboard-borg-${job}";
-      value = {
+      systemd.timers.dashboard-smart-check = lib.mkIf cfg.customChecks.smart {
         wantedBy = [ "timers.target" ];
         timerConfig = {
-          OnBootSec = "5min";
-          OnUnitActiveSec = "1h";
+          OnBootSec = "2min";
+          OnUnitActiveSec = "5min";
         };
       };
-    }) cfg.customChecks.borgJobs);
-  };
+
+      # NixOS generation + reboot-required textfile script.
+      systemd.services.dashboard-nixos-info = {
+        description = "Dump NixOS generation info to node-exporter textfile";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = pkgs.writeShellScript "nixos-info" ''
+            OUTPUT="${cfg.textfileDir}/nixos.prom"
+            echo "# HELP node_nixos_generation Current NixOS system generation number" > "$OUTPUT.tmp"
+            echo "# TYPE node_nixos_generation gauge" >> "$OUTPUT.tmp"
+            gen=$(readlink /nix/var/nix/profiles/system | ${pkgs.gnugrep}/bin/grep -oP '\d+' | tail -1)
+            echo "node_nixos_generation ''${gen:-0}" >> "$OUTPUT.tmp"
+
+            echo "# HELP node_reboot_required Whether a reboot is needed (1=yes, 0=no)" >> "$OUTPUT.tmp"
+            echo "# TYPE node_reboot_required gauge" >> "$OUTPUT.tmp"
+            current=$(readlink /run/current-system)
+            installed=$(readlink /nix/var/nix/profiles/system)
+            if [ "$current" != "$installed" ]; then
+              echo "node_reboot_required 1" >> "$OUTPUT.tmp"
+            else
+              echo "node_reboot_required 0" >> "$OUTPUT.tmp"
+            fi
+            mv "$OUTPUT.tmp" "$OUTPUT"
+          '';
+        };
+      };
+
+      systemd.timers.dashboard-nixos-info = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "1min";
+          OnUnitActiveSec = "5min";
+        };
+      };
+    }
+
+    # Borg backup status textfile scripts (one per configured job).
+    {
+      systemd.services = lib.listToAttrs (map (job: {
+        name = "dashboard-borg-${job}";
+        value = {
+          description = "Dump Borg backup status for job ${job} to node-exporter textfile";
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = pkgs.writeShellScript "borg-check-${job}" ''
+              OUTPUT="${cfg.textfileDir}/borg_${job}.prom"
+              echo "# HELP node_borg_last_backup_timestamp_seconds Unix timestamp of last successful Borg backup" > "$OUTPUT.tmp"
+              echo "# TYPE node_borg_last_backup_timestamp_seconds gauge" >> "$OUTPUT.tmp"
+              ts=$(${pkgs.borgbackup}/bin/borg list --last 1 --format '{time:%s}' 2>/dev/null || echo "0")
+              echo "node_borg_last_backup_timestamp_seconds{job=\"${job}\"} $ts" >> "$OUTPUT.tmp"
+              mv "$OUTPUT.tmp" "$OUTPUT"
+            '';
+          };
+        };
+      }) cfg.customChecks.borgJobs);
+
+      systemd.timers = lib.listToAttrs (map (job: {
+        name = "dashboard-borg-${job}";
+        value = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "5min";
+            OnUnitActiveSec = "1h";
+          };
+        };
+      }) cfg.customChecks.borgJobs);
+    }
+  ]);
 }

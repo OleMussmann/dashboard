@@ -33,11 +33,18 @@ if [[ "$CONFIG_ONLY" == false ]]; then
 fi
 
 # --- Push config.toml to dashboard-config volume ---
+DASHBOARD_CHANGED=false
 if [[ -f config.toml ]]; then
   echo "==> Pushing config.toml to dashboard-api container..."
   incus file push config.toml dashboard-api/config/config.toml
+  DASHBOARD_CHANGED=true
 else
   echo "==> Skipping config.toml (file not found locally)"
+fi
+
+if [[ "$CONFIG_ONLY" == true ]] && [[ "$DASHBOARD_CHANGED" == true ]]; then
+  echo "==> Restarting dashboard-api to pick up config changes..."
+  incus restart dashboard-api
 fi
 
 # --- Push homepage config files to homepage container ---

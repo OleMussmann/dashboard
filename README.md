@@ -140,8 +140,9 @@ Then import the agent module on each machine you want to monitor:
     enable = true;
     basicAuthPasswordFile = config.age.secrets."node-exporter-pass".path;
     customChecks = {
-      smart = true;        # if the machine has physical disks
-      borgJobs = [ "default" ];  # if the machine runs borgmatic
+      smart = true;              # if the machine has physical disks
+      borgJobs = [ "default" ];  # if the machine runs NixOS borgmatic/borgbackup
+      pikaBackupUsers = [ "ole" ]; # if a desktop user runs Pika Backup
     };
   };
 }

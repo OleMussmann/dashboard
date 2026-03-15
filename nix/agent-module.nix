@@ -36,6 +36,12 @@ in
         default = [];
         description = "List of borgmatic job names to monitor.";
       };
+
+      pikaBackupUsers = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "List of users running Pika Backup. The agent will read their history.json to report backup status.";
+      };
     };
   };
 
@@ -145,7 +151,7 @@ in
 
     # Borg backup status textfile scripts (one per configured job).
     {
-      systemd.services = lib.listToAttrs (map (job: {
+      systemd.services = (lib.listToAttrs (map (job: {
         name = "dashboard-borg-${job}";
         value = {
           description = "Dump Borg backup status for job ${job} to node-exporter textfile";
@@ -172,9 +178,45 @@ in
             '';
           };
         };
-      }) cfg.customChecks.borgJobs);
+      }) cfg.customChecks.borgJobs)) // (lib.listToAttrs (map (user: {
+        name = "dashboard-pika-${user}";
+        value = {
+          description = "Dump Pika Backup status for user ${user} to node-exporter textfile";
+          serviceConfig = {
+            Type = "oneshot";
+            User = user;
+            ExecStart = pkgs.writeShellScript "pika-check-${user}" ''
+              OUTPUT="/tmp/pika_${user}.prom"
+              echo "# HELP node_borg_last_backup_timestamp_seconds Unix timestamp of last successful Borg backup" > "$OUTPUT.tmp"
+              echo "# TYPE node_borg_last_backup_timestamp_seconds gauge" >> "$OUTPUT.tmp"
 
-      systemd.timers = lib.listToAttrs (map (job: {
+              # Find the history file (could be Flatpak or Native)
+              HOME_DIR=$(${pkgs.getent}/bin/getent passwd "${user}" | ${pkgs.coreutils}/bin/cut -d: -f6)
+              FLATPAK_FILE="$HOME_DIR/.var/app/org.gnome.World.PikaBackup/config/pika-backup/history.json"
+              NATIVE_FILE="$HOME_DIR/.config/pika-backup/history.json"
+
+              FILE=""
+              if [ -f "$FLATPAK_FILE" ]; then FILE="$FLATPAK_FILE"; fi
+              if [ -f "$NATIVE_FILE" ]; then FILE="$NATIVE_FILE"; fi
+
+              if [ -n "$FILE" ]; then
+                for id in $(${pkgs.jq}/bin/jq -r 'keys[]' "$FILE" 2>/dev/null || echo ""); do
+                  ts_iso=$(${pkgs.jq}/bin/jq -r ".\"$id\".last_completed.end // empty" "$FILE" 2>/dev/null || echo "")
+                  if [ -n "$ts_iso" ]; then
+                    ts_epoch=$(${pkgs.coreutils}/bin/date -d "$ts_iso" +%s 2>/dev/null || echo "0")
+                    echo "node_borg_last_backup_timestamp_seconds{job=\"pika-${user}-$id\"} $ts_epoch" >> "$OUTPUT.tmp"
+                  fi
+                done
+              fi
+
+              mv "$OUTPUT.tmp" "$OUTPUT"
+            '';
+            ExecStartPost = "+${pkgs.coreutils}/bin/mv /tmp/pika_${user}.prom ${cfg.textfileDir}/pika_${user}.prom";
+          };
+        };
+      }) cfg.customChecks.pikaBackupUsers));
+
+      systemd.timers = (lib.listToAttrs (map (job: {
         name = "dashboard-borg-${job}";
         value = {
           wantedBy = [ "timers.target" ];
@@ -183,7 +225,17 @@ in
             OnUnitActiveSec = "1h";
           };
         };
-      }) cfg.customChecks.borgJobs);
+      }) cfg.customChecks.borgJobs)) // (lib.listToAttrs (map (user: {
+        name = "dashboard-pika-${user}";
+        value = {
+          description = "Timer for Pika Backup status check for user ${user}";
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "5min";
+            OnUnitActiveSec = "1h";
+          };
+        };
+      }) cfg.customChecks.pikaBackupUsers));
     }
   ]);
 }

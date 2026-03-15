@@ -270,20 +270,33 @@ func calcTemperatures(families map[string]*dto.MetricFamily) map[string]float64 
 func calcBorgLastBackup(families map[string]*dto.MetricFamily) *float64 {
 	// textfile metric: node_borg_last_backup_timestamp_seconds
 	fam, ok := families["node_borg_last_backup_timestamp_seconds"]
-	if !ok {
+	if !ok || len(fam.GetMetric()) == 0 {
 		return nil
 	}
-	if len(fam.GetMetric()) == 0 {
+
+	var oldestValid float64 = -1
+
+	for _, metric := range fam.GetMetric() {
+		var val float64
+		if g := metric.GetGauge(); g != nil {
+			val = g.GetValue()
+		} else if u := metric.GetUntyped(); u != nil {
+			val = u.GetValue()
+		}
+		
+		// A value of 0 means the script failed to query the repository.
+		if val > 0 {
+			if oldestValid == -1 || val < oldestValid {
+				oldestValid = val
+			}
+		}
+	}
+
+	if oldestValid == -1 {
 		return nil
 	}
-	v := gaugeValue(families, "node_borg_last_backup_timestamp_seconds")
-	// A value of 0 means the borg check script failed to query the
-	// repository (e.g. missing BORG_REPO). Treat it as "no data"
-	// rather than "backup at Unix epoch" to avoid bogus stale alerts.
-	if v == 0 {
-		return nil
-	}
-	return &v
+
+	return &oldestValid
 }
 
 func labelValue(m *dto.Metric, name string) string {

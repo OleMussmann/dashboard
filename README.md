@@ -56,72 +56,69 @@ incus storage volume create local dashboard-config
 incus storage volume create local homepage-config
 ```
 
-### 3. Generate Incus metrics TLS certificate
+### 3. Initialize Containers and Attach Volumes
 
-Generate a metrics-only TLS client certificate on your local machine and push
-it into the `dashboard-secrets` storage volume. To push files into a volume
-we use a temporary helper container.
-
-**Generate the certificate locally:**
+Build the backend image, initialize the containers, and attach the storage volumes.
+This sets up the filesystems so we can push configuration into them.
 
 ```bash
+# Build the Go API image (produces an Incus-native tarball)
+nix build .#dashboard-api-image
+
+# Import the image into the remote Incus server
+incus image import ./result --alias dashboard-api-img
+
+# Initialize Dashboard API container and attach volumes
+incus init dashboard-api-img dashboard-api
+incus storage volume attach local dashboard-secrets dashboard-api /secrets
+incus storage volume attach local dashboard-config dashboard-api /config
+
+# Add the GitHub Container Registry OCI remote (one-time setup)
+incus remote add ghcr https://ghcr.io --protocol=oci
+
+# Initialize Homepage container and attach volume
+incus init ghcr:gethomepage/homepage:latest homepage
+incus storage volume attach local homepage-config homepage /app/config
+
+# Allow the IncusOS Tailscale hostname to pass Homepage's host validation
+incus config set homepage environment.HOMEPAGE_ALLOWED_HOSTS=incusos.tail2c589.ts.net:3000
+```
+
+### 4. Generate and Push Secrets
+
+Generate a metrics-only TLS client certificate for the Incus metrics endpoint.
+
+```bash
+# Generate the certificate locally
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 \
   -sha384 -keyout secrets/metrics.key -out secrets/metrics.crt -nodes -days 3650 \
   -subj "/CN=dashboard-metrics"
-```
 
-**Trust the certificate in Incus:**
-
-The command reads the local file and sends it to the (now default) remote
-server via the API -- no need to copy the cert to the host:
-
-```bash
+# Trust the certificate in Incus
 incus config trust add-certificate secrets/metrics.crt --type=metrics
+
+# Push to the container volume
+incus file push secrets/metrics.crt dashboard-api/secrets/metrics.crt
+incus file push secrets/metrics.key dashboard-api/secrets/metrics.key
 ```
 
-**Push secrets into the storage volume using a helper container:**
-
-To write files into a storage volume, launch a temporary helper container,
-attach the volume, push the files via the Incus API, then stop the helper
-(ephemeral containers are deleted on stop):
-
-```bash
-incus launch images:alpine/edge helper --ephemeral
-incus storage volume attach local dashboard-secrets helper /mnt
-incus file push secrets/metrics.crt helper/mnt/metrics.crt
-incus file push secrets/metrics.key helper/mnt/metrics.key
-incus stop helper
-```
-
-### 4. Create the node-exporter Basic Auth password
-
-Generate a password and its bcrypt hash. The plaintext password goes into the
-`dashboard-secrets` volume (so the dashboard-api container can authenticate
-against node-exporter). The bcrypt hash goes into your NixOS `agenix` secrets
-(so node-exporter can verify incoming requests).
+Generate the node-exporter Basic Auth password. The plaintext goes to the
+container, the bcrypt hash goes to your NixOS configurations.
 
 ```bash
 # Generate a random password
 PASS=$(openssl rand -base64 24)
 echo -n "$PASS" > secrets/node-exporter-pass
 
+# Push the plaintext password to the container
+incus file push secrets/node-exporter-pass dashboard-api/secrets/node-exporter-pass
+
 # Generate bcrypt hash for agenix (needs htpasswd or similar)
 htpasswd -nbBC 10 "" "$PASS" | tr -d ':\n'
 ```
 
-Push the plaintext password into the secrets volume using a helper container
-(same approach as step 3):
-
-```bash
-incus launch images:alpine/edge helper --ephemeral
-incus storage volume attach local dashboard-secrets helper /mnt
-incus file push secrets/node-exporter-pass helper/mnt/node-exporter-pass
-incus stop helper
-```
-
 Store the bcrypt hash via `agenix` in your NixOS configurations. Every
-monitored machine needs access to this secret so that node-exporter can be
-configured with Basic Auth.
+monitored machine needs access to this secret.
 
 ### 5. Add the dashboard flake input to your NixOS configs
 
@@ -179,13 +176,10 @@ Fill in:
 
 See `config.example.toml` for full documentation of all options.
 
-Push `config.toml` into the `dashboard-config` storage volume:
+Push `config.toml` into the dashboard API container:
 
 ```bash
-incus launch images:alpine/edge helper --ephemeral
-incus storage volume attach local dashboard-config helper /mnt
-incus file push config.toml helper/mnt/config.toml
-incus stop helper
+incus file push config.toml dashboard-api/config/config.toml
 ```
 
 ### 7. Update Homepage config templates
@@ -213,56 +207,21 @@ You will also need:
   profile page at `https://<your-ha-url>/profile`). No username is needed;
   the token is the only authentication for the widget.
 
-Push the homepage config files into the `homepage-config` storage volume:
+Push the homepage config files directly into the homepage container:
 
 ```bash
-incus launch images:alpine/edge helper --ephemeral
-incus storage volume attach local homepage-config helper /mnt
-incus file push homepage/services.yaml helper/mnt/services.yaml
-incus file push homepage/settings.yaml helper/mnt/settings.yaml
-incus file push homepage/widgets.yaml helper/mnt/widgets.yaml
-incus file push homepage/bookmarks.yaml helper/mnt/bookmarks.yaml
-incus file push homepage/docker.yaml helper/mnt/docker.yaml
-incus stop helper
+incus file push homepage/services.yaml homepage/app/config/services.yaml
+incus file push homepage/settings.yaml homepage/app/config/settings.yaml
+incus file push homepage/widgets.yaml homepage/app/config/widgets.yaml
+incus file push homepage/bookmarks.yaml homepage/app/config/bookmarks.yaml
+incus file push homepage/docker.yaml homepage/app/config/docker.yaml
 ```
 
-### 8. First-time Incus container setup
-
-Build the dashboard-api image locally, import it into the remote, then create
-both containers with the storage volumes attached.
-
-```bash
-# Build the image (produces an Incus-native tarball)
-nix build .#dashboard-api-image
-
-# Import the image into the (default) remote Incus server
-incus image import ./result --alias dashboard-api
-
-# Dashboard API container (use init, not launch, so volumes are
-# attached before the first start)
-incus init dashboard-api dashboard-api
-incus storage volume attach local dashboard-secrets dashboard-api /secrets
-incus storage volume attach local dashboard-config dashboard-api /config
-incus start dashboard-api
-
-# Add the GitHub Container Registry OCI remote (one-time setup)
-incus remote add ghcr https://ghcr.io --protocol=oci
-
-# Homepage container (use init so we can configure before first start)
-incus init ghcr:gethomepage/homepage:latest homepage
-incus storage volume attach local homepage-config homepage /app/config
-
-# Allow the IncusOS Tailscale hostname to pass Homepage's host validation
-incus config set homepage environment.HOMEPAGE_ALLOWED_HOSTS=incusos.tail2c589.ts.net:3000
-
-incus start homepage
-```
-
-### 9. Set up networking (port forwarding)
+### 8. Start Containers and Network Forwarding
 
 The containers sit on an Incus bridge network. To reach them from Tailscale,
 add proxy devices that forward ports from the IncusOS host into the
-containers:
+containers. Finally, start the containers.
 
 ```bash
 # Homepage (port 3000)
@@ -273,6 +232,9 @@ incus config device add homepage proxy-http proxy \
 # Homepage reaches it via the Incus bridge (http://dashboard-api.incus:8080)
 incus config device add dashboard-api proxy-http proxy \
   listen=tcp:0.0.0.0:8080 connect=tcp:127.0.0.1:8080
+
+incus start dashboard-api
+incus start homepage
 ```
 
 You can now access Homepage at `http://incusos.tail2c589.ts.net:3000` from

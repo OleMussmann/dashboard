@@ -65,7 +65,7 @@ we use a temporary helper container.
 
 ```bash
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 \
-  -sha384 -keyout metrics.key -out metrics.crt -nodes -days 3650 \
+  -sha384 -keyout secrets/metrics.key -out secrets/metrics.crt -nodes -days 3650 \
   -subj "/CN=dashboard-metrics"
 ```
 
@@ -75,7 +75,7 @@ The command reads the local file and sends it to the (now default) remote
 server via the API -- no need to copy the cert to the host:
 
 ```bash
-incus config trust add-certificate metrics.crt --type=metrics
+incus config trust add-certificate secrets/metrics.crt --type=metrics
 ```
 
 **Push secrets into the storage volume using a helper container:**
@@ -87,8 +87,8 @@ attach the volume, push the files via the Incus API, then stop the helper
 ```bash
 incus launch images:alpine/edge helper --ephemeral
 incus storage volume attach local dashboard-secrets helper /mnt
-incus file push metrics.crt helper/mnt/metrics.crt
-incus file push metrics.key helper/mnt/metrics.key
+incus file push secrets/metrics.crt helper/mnt/metrics.crt
+incus file push secrets/metrics.key helper/mnt/metrics.key
 incus stop helper
 ```
 
@@ -102,7 +102,7 @@ against node-exporter). The bcrypt hash goes into your NixOS `agenix` secrets
 ```bash
 # Generate a random password
 PASS=$(openssl rand -base64 24)
-echo -n "$PASS" > node-exporter-pass
+echo -n "$PASS" > secrets/node-exporter-pass
 
 # Generate bcrypt hash for agenix (needs htpasswd or similar)
 htpasswd -nbBC 10 "" "$PASS" | tr -d ':\n'
@@ -114,7 +114,7 @@ Push the plaintext password into the secrets volume using a helper container
 ```bash
 incus launch images:alpine/edge helper --ephemeral
 incus storage volume attach local dashboard-secrets helper /mnt
-incus file push node-exporter-pass helper/mnt/node-exporter-pass
+incus file push secrets/node-exporter-pass helper/mnt/node-exporter-pass
 incus stop helper
 ```
 

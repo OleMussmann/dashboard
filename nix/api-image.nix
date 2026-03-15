@@ -19,9 +19,10 @@ let
   # Init script: obtain an IPv4 lease via DHCP, then exec the Go binary.
   # udhcpc -n = exit if no lease obtained, -q = quit after obtaining lease,
   # -s = dispatcher script that configures the interface and resolv.conf.
+  # -x hostname:$(hostname) = tell DHCP server our hostname so it goes into DNS
   init = writeText "init" ''
 #!/bin/sh
-/bin/udhcpc -i eth0 -n -q -s /etc/udhcpc.script
+/bin/udhcpc -i eth0 -n -q -s /etc/udhcpc.script -x hostname:$(/bin/hostname)
 exec /bin/dashboard-api
   '';
 in
@@ -35,7 +36,7 @@ runCommand "dashboard-api-incus-image.tar.gz" { } ''
   # Include busybox for shell and udhcpc (DHCP client).
   # Busybox is a single static binary; symlink common applets.
   cp ${busybox}/bin/busybox image/rootfs/bin/busybox
-  for cmd in sh ip ifconfig udhcpc logger awk; do
+  for cmd in sh ip ifconfig udhcpc logger awk cat hostname grep; do
     ln -s busybox image/rootfs/bin/$cmd
   done
 

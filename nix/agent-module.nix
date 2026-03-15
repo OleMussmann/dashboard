@@ -149,13 +149,24 @@ in
         name = "dashboard-borg-${job}";
         value = {
           description = "Dump Borg backup status for job ${job} to node-exporter textfile";
+          # Run after the borg backup service if it exists, and share its
+          # PATH so the borg-job-<name> wrapper (with BORG_REPO and
+          # passphrase pre-configured) is available.
+          path = [ "/run/current-system/sw" ];
           serviceConfig = {
             Type = "oneshot";
             ExecStart = pkgs.writeShellScript "borg-check-${job}" ''
               OUTPUT="${cfg.textfileDir}/borg_${job}.prom"
               echo "# HELP node_borg_last_backup_timestamp_seconds Unix timestamp of last successful Borg backup" > "$OUTPUT.tmp"
               echo "# TYPE node_borg_last_backup_timestamp_seconds gauge" >> "$OUTPUT.tmp"
-              ts=$(${pkgs.borgbackup}/bin/borg list --last 1 --format '{time:%s}' 2>/dev/null || echo "0")
+              # Use the NixOS borg-job wrapper which has BORG_REPO and
+              # passphrase pre-configured. Falls back to plain borg if
+              # the wrapper does not exist.
+              BORG="borg-job-${job}"
+              if ! command -v "$BORG" >/dev/null 2>&1; then
+                BORG="${pkgs.borgbackup}/bin/borg"
+              fi
+              ts=$($BORG list --last 1 --format '{time:%s}' 2>/dev/null || echo "0")
               echo "node_borg_last_backup_timestamp_seconds{job=\"${job}\"} $ts" >> "$OUTPUT.tmp"
               mv "$OUTPUT.tmp" "$OUTPUT"
             '';

@@ -3,6 +3,7 @@
 # Update hostnames and URLs to match your environment.
 
 - Infrastructure:
+    # Computers
     - bubbles:
         icon: si-nixos
         widget:
@@ -18,6 +19,68 @@
             - field: metrics.disk_used_percent
               label: Disk
               format: percent
+            - field: metrics.borg_last_backup_hours
+              label: Backup
+              format: number
+              suffix: "h ago"
+    - dale:
+        icon: si-nixos
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status/dale
+          mappings:
+            - field: status
+              label: Status
+            - field: metrics.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: metrics.disk_used_percent
+              label: Disk
+              format: percent
+            - field: metrics.borg_last_backup_hours
+              label: Backup
+              format: number
+              suffix: "h ago"
+    # Servers
+    - cosmo:
+        icon: si-nixos
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status/cosmo
+          mappings:
+            - field: status
+              label: Status
+            - field: metrics.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: metrics.disk_used_percent
+              label: Disk
+              format: percent
+            - field: metrics.borg_last_backup_hours
+              label: Backup
+              format: number
+              suffix: "h ago"
+    - pintsize:
+        icon: si-nixos
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status/pintsize
+          mappings:
+            - field: status
+              label: Status
+            - field: metrics.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: metrics.disk_used_percent
+              label: Disk
+              format: percent
+            - field: metrics.borg_last_backup_hours
+              label: Backup
+              format: number
+              suffix: "h ago"
 
     # - server-02:
     #     icon: si-nixos
@@ -34,6 +97,10 @@
     #         - field: metrics.disk_used_percent
     #           label: Disk
     #           format: percent
+    #         - field: metrics.borg_last_backup_hours
+    #           label: Backup
+    #           format: number
+    #           suffix: "h ago"
 
 - Services:
     - Nextcloud:
@@ -52,7 +119,7 @@
         widget:
           type: homeassistant
           url: https://ha.ole.mn
-          key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0NDI0ZmFjYjM2ZGY0OWJhOWIxNTFhNmI0Y2QwMzcwNiIsImlhdCI6MTc3MzUwNjk0MiwiZXhwIjoyMDg4ODY2OTQyfQ.5isQROnMfUAtG70Ikrh6o-BpxkMswqrqOo5uTJJugJM"
+          key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkNzI1YjM4Mzg3OGI0NjQ4YjExYWU0NzQ3MjVlOGQyOCIsImlhdCI6MTc3MzU4Njc5NCwiZXhwIjoyMDg4OTQ2Nzk0fQ.hjsC9Wbgea8JRT5nWudHATE5tZ7bYreDaEw89MaXy4Q"
 
 - Monitoring:
     - Dashboard API:

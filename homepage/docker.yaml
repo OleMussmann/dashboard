@@ -1,0 +1,3 @@
+# Homepage Docker integration
+# See https://gethomepage.dev/configs/docker/
+# Leave empty to disable Docker auto-discovery.

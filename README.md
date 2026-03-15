@@ -6,9 +6,10 @@ IncusOS:
 - **Homepage** ([gethomepage.dev](https://gethomepage.dev)): Frontend startpage
   with built-in widgets for Nextcloud, Home Assistant, and weather. Uses
   `customapi` widgets for NixOS and Incus data from the Go backend.
-- **dashboard-api**: A statically-compiled Go binary (scratch container) that
-  polls NixOS machines via Prometheus Node Exporter and scrapes the Incus metrics
-  endpoint. Serves a JSON API for Homepage to consume.
+- **dashboard-api**: A statically-compiled Go binary in a minimal container
+  (busybox + CA certificates) that polls NixOS machines via Prometheus Node
+  Exporter and scrapes the Incus metrics endpoint. Serves a JSON API for
+  Homepage to consume.
 
 No database. No historical data. Current state only. All communication over
 Tailscale.
@@ -173,6 +174,8 @@ Fill in:
   `/secrets/metrics.crt` and `/secrets/metrics.key`)
 - Path to the node-exporter password file (`/secrets/node-exporter-pass`)
 - Set `critical = true/false` for each machine
+- **Important**: Node Exporter URLs must use `http://`, not `https://`.
+  Node Exporter serves plain HTTP by default.
 
 See `config.example.toml` for full documentation of all options.
 
@@ -196,8 +199,9 @@ Edit `homepage/widgets.yaml`:
 - Set your latitude/longitude and timezone
 
 You will also need:
-- A **Nextcloud Serverinfo API token**. This cannot be generated from the
-  web UI. On your Nextcloud server, run:
+- A **Nextcloud Serverinfo API token**. The **Monitoring** app (serverinfo)
+  must be enabled in the Nextcloud admin panel under **Apps**. The token
+  cannot be generated from the web UI. On your Nextcloud server, run:
   ```bash
   openssl rand -hex 32
   ```
@@ -205,14 +209,20 @@ You will also need:
   ```bash
   occ config:app:set serverinfo token --value <generated_token_value>
   ```
-- A **Home Assistant long-lived access token** (from your HA profile page)
+- A **Home Assistant long-lived access token** (generate one from your HA
+  profile page at `https://<your-ha-url>/profile`). No username is needed;
+  the token is the only authentication for the widget.
 
 Push the homepage config files into the `homepage-config` storage volume:
 
 ```bash
 incus launch images:alpine/edge helper --ephemeral
 incus storage volume attach local homepage-config helper /mnt
-incus file push -r homepage/ helper/mnt/
+incus file push homepage/services.yaml helper/mnt/services.yaml
+incus file push homepage/settings.yaml helper/mnt/settings.yaml
+incus file push homepage/widgets.yaml helper/mnt/widgets.yaml
+incus file push homepage/bookmarks.yaml helper/mnt/bookmarks.yaml
+incus file push homepage/docker.yaml helper/mnt/docker.yaml
 incus stop helper
 ```
 

@@ -18,6 +18,7 @@
           dashboard-api = pkgs.callPackage ./nix/package.nix { };
           dashboard-api-image = pkgs.callPackage ./nix/api-image.nix {
             dashboard-api = self.packages.${system}.dashboard-api;
+            busybox = pkgs.pkgsStatic.busybox;
           };
           default = self.packages.${system}.dashboard-api;
         }

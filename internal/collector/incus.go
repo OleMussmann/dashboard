@@ -10,6 +10,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 )
 
 // IncusInstance holds translated metrics for a single Incus instance.
@@ -74,7 +75,7 @@ func ScrapeIncus(ctx context.Context, client *http.Client, url string) (*IncusMe
 }
 
 func parseIncusMetrics(r io.Reader) (*IncusMetrics, error) {
-	parser := &expfmt.TextParser{}
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	families, err := parser.TextToMetricFamilies(r)
 	if err != nil {
 		return nil, fmt.Errorf("parse incus metrics: %w", err)

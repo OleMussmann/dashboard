@@ -7,9 +7,11 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 )
 
 // NixOSMetrics holds the translated, frontend-ready metrics for one NixOS machine.
@@ -24,7 +26,8 @@ type NixOSMetrics struct {
 	RebootRequired   bool              `json:"reboot_required"`
 	NixOSGeneration  int64             `json:"nixos_generation"`
 	Temperatures     map[string]float64 `json:"temperatures"`
-	BorgLastBackup   *float64          `json:"borg_last_backup,omitempty"`
+	BorgLastBackup      *float64 `json:"borg_last_backup,omitempty"`
+	BorgLastBackupHours *float64 `json:"borg_last_backup_hours,omitempty"`
 }
 
 // ScrapeNodeExporter fetches and parses metrics from a Prometheus Node Exporter endpoint.
@@ -51,7 +54,7 @@ func ScrapeNodeExporter(ctx context.Context, client *http.Client, url, username,
 }
 
 func parseNodeExporterMetrics(r io.Reader, contentType string) (*NixOSMetrics, error) {
-	parser := &expfmt.TextParser{}
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	families, err := parser.TextToMetricFamilies(r)
 	if err != nil {
 		return nil, fmt.Errorf("parse prometheus text: %w", err)
@@ -73,6 +76,11 @@ func parseNodeExporterMetrics(r io.Reader, contentType string) (*NixOSMetrics, e
 	m.NixOSGeneration = int64(gaugeValue(families, "node_nixos_generation"))
 	m.Temperatures = calcTemperatures(families)
 	m.BorgLastBackup = calcBorgLastBackup(families)
+	if m.BorgLastBackup != nil {
+		hours := time.Since(time.Unix(int64(*m.BorgLastBackup), 0)).Hours()
+		h := math.Round(hours*10) / 10
+		m.BorgLastBackupHours = &h
+	}
 
 	return m, nil
 }
@@ -113,25 +121,19 @@ func calcRAMPercent(families map[string]*dto.MetricFamily) float64 {
 }
 
 func calcRootDiskPercent(families map[string]*dto.MetricFamily) float64 {
-	// Find the root filesystem mount.
 	sizeFam := families["node_filesystem_size_bytes"]
 	availFam := families["node_filesystem_avail_bytes"]
 	if sizeFam == nil || availFam == nil {
 		return 0
 	}
 
-	// Build a map of mountpoint -> avail bytes.
-	availMap := make(map[string]float64)
-	for _, m := range availFam.GetMetric() {
-		mp := labelValue(m, "mountpoint")
-		if mp != "" && m.GetGauge() != nil {
-			availMap[mp] = m.GetGauge().GetValue()
-		}
+	// Build maps of mountpoint -> size/avail bytes.
+	type fsInfo struct {
+		size, avail float64
+		fstype      string
 	}
+	filesystems := make(map[string]fsInfo)
 
-	// Find root mount or the largest filesystem as fallback.
-	var bestSize, bestAvail float64
-	foundRoot := false
 	for _, m := range sizeFam.GetMetric() {
 		mp := labelValue(m, "mountpoint")
 		fstype := labelValue(m, "fstype")
@@ -139,21 +141,56 @@ func calcRootDiskPercent(families map[string]*dto.MetricFamily) float64 {
 			continue
 		}
 		// Skip pseudo filesystems.
-		if fstype == "tmpfs" || fstype == "devtmpfs" || fstype == "overlay" {
+		if fstype == "tmpfs" || fstype == "devtmpfs" || fstype == "overlay" ||
+			fstype == "ramfs" || fstype == "fuse.lxcfs" {
 			continue
 		}
-		size := m.GetGauge().GetValue()
-		avail, ok := availMap[mp]
-		if !ok {
+		filesystems[mp] = fsInfo{size: m.GetGauge().GetValue(), fstype: fstype}
+	}
+	for _, m := range availFam.GetMetric() {
+		mp := labelValue(m, "mountpoint")
+		if m.GetGauge() == nil || mp == "" {
 			continue
 		}
-		if mp == "/" {
-			bestSize = size
-			bestAvail = avail
-			foundRoot = true
-		} else if !foundRoot && size > bestSize {
-			bestSize = size
-			bestAvail = avail
+		if fs, ok := filesystems[mp]; ok {
+			fs.avail = m.GetGauge().GetValue()
+			filesystems[mp] = fs
+		}
+	}
+
+	// For ZFS: all datasets in a pool share the same free space, so
+	// individual dataset usage is misleading (especially "/" which may
+	// be nearly empty on impermanence setups). Use the largest dataset
+	// by size, which best represents the pool capacity.
+	var bestSize, bestAvail float64
+	isZFS := false
+	for _, fs := range filesystems {
+		if fs.fstype == "zfs" {
+			isZFS = true
+			break
+		}
+	}
+
+	if isZFS {
+		// Pick the dataset with the largest reported size.
+		for _, fs := range filesystems {
+			if fs.fstype == "zfs" && fs.size > bestSize {
+				bestSize = fs.size
+				bestAvail = fs.avail
+			}
+		}
+	} else {
+		// Non-ZFS: prefer the root mount, fall back to largest filesystem.
+		for mp, fs := range filesystems {
+			if mp == "/" {
+				bestSize = fs.size
+				bestAvail = fs.avail
+				break
+			}
+			if fs.size > bestSize {
+				bestSize = fs.size
+				bestAvail = fs.avail
+			}
 		}
 	}
 
@@ -240,6 +277,12 @@ func calcBorgLastBackup(families map[string]*dto.MetricFamily) *float64 {
 		return nil
 	}
 	v := gaugeValue(families, "node_borg_last_backup_timestamp_seconds")
+	// A value of 0 means the borg check script failed to query the
+	// repository (e.g. missing BORG_REPO). Treat it as "no data"
+	// rather than "backup at Unix epoch" to avoid bogus stale alerts.
+	if v == 0 {
+		return nil
+	}
 	return &v
 }
 

@@ -1,3 +1,39 @@
 # Homepage bookmarks
 # See https://gethomepage.dev/configs/bookmarks/
 # Add bookmarks here or leave empty to disable the default demo bookmarks.
+---
+- Tech News:
+    - Heise:
+        - abbr: HE
+          href: https://heise.de/
+    - Golem:
+        - abbr: GO
+          href: https://golem.de/
+    - Tweakers:
+        - abbr: TW
+          href: https://tweakers.net/
+    - Ars Technica:
+        - abbr: AT
+          href: https://arstechnica.com/
+    - Phoronix:
+        - abbr: Ph
+          href: https://phoronix.com/
+    - The Verge:
+        - abbr: TV
+          href: https://theverge.com/
+    - Engadget:
+        - abbr: EN
+          href: https://engadget.com/
+    - Trusted Reviews:
+        - abbr: TR
+          href: https://trustedreviews.com/
+    - The Register:
+        - abbr: RE
+          href: https://theregister.com/
+- NixOS:
+    - NixOS Search:
+        - abbr: SE
+          href: https://search.nixos.org/packages
+    - Home Manager Configuration Options:
+        - abbr: HM
+          href: https://nix-community.github.io/home-manager/options.xhtml

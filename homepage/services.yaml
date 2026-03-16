@@ -112,6 +112,88 @@
     #           format: number
     #           suffix: "h ago"
 
+- IncusOS:
+    - Host:
+        icon: si-linux
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status
+          mappings:
+            - field: incus.status
+              label: Status
+            - field: incus.metrics.host.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: incus.metrics.host.cpu_load_1m
+              label: Load
+              format: number
+            - field: incus.metrics.host.memory_used_percent
+              label: RAM
+              format: percent
+            - field: incus.metrics.host.disk_used_percent
+              label: Disk
+              format: percent
+            - field: incus.metrics.host.zfs_pool_state
+              label: ZFS
+
+    - homepage:
+        icon: homepage
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status
+          mappings:
+            - field: incus.metrics.instances.homepage.status
+              label: Status
+            - field: incus.metrics.instances.homepage.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: incus.metrics.instances.homepage.memory_used_bytes
+              label: RAM
+              format: bytes
+            - field: incus.metrics.instances.homepage.processes
+              label: Procs
+              format: number
+
+    - dashboard-api:
+        icon: mdi-api
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status
+          mappings:
+            - field: incus.metrics.instances.dashboard-api.status
+              label: Status
+            - field: incus.metrics.instances.dashboard-api.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: incus.metrics.instances.dashboard-api.memory_used_bytes
+              label: RAM
+              format: bytes
+            - field: incus.metrics.instances.dashboard-api.processes
+              label: Procs
+              format: number
+
+    - Home-Assistant-OS:
+        icon: home-assistant
+        widget:
+          type: customapi
+          url: http://dashboard-api:8080/api/v1/status
+          mappings:
+            - field: incus.metrics.instances.Home-Assistant-OS.status
+              label: Status
+            - field: incus.metrics.instances.Home-Assistant-OS.uptime_hours
+              label: Uptime
+              format: number
+              suffix: "h"
+            - field: incus.metrics.instances.Home-Assistant-OS.memory_used_bytes
+              label: RAM
+              format: bytes
+            - field: incus.metrics.instances.Home-Assistant-OS.disk_used_bytes
+              label: Disk
+              format: bytes
+
 - Services:
     - Nextcloud:
         icon: nextcloud

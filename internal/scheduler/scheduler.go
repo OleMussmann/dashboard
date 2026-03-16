@@ -68,8 +68,9 @@ type machineTracker struct {
 }
 
 type incusTracker struct {
-	state     *IncusState
-	failCount int
+	state            *IncusState
+	failCount        int
+	previousOOMKills map[string]int64 // per-instance OOM kill tracking
 }
 
 // New creates a scheduler from the given config.
@@ -107,6 +108,7 @@ func New(cfg *config.Config, alert *alerter.Alerter, logger *slog.Logger) (*Sche
 			state: &IncusState{
 				Status: StatusOffline,
 			},
+			previousOOMKills: make(map[string]int64),
 		}
 	}
 
@@ -331,5 +333,20 @@ func (s *Scheduler) pollIncus(ctx context.Context) {
 	s.incus.failCount = 0
 	s.incus.state.Status = StatusOnline
 	s.incus.state.LastSeen = time.Now()
+
+	// Check for OOM kills on Incus instances (delta-based, same as NixOS).
+	if metrics != nil && s.cfg.Alerting.Rules.OOMKill {
+		for name, inst := range metrics.Instances {
+			prev, hasPrev := s.incus.previousOOMKills[name]
+			if hasPrev && inst.OOMKills > prev {
+				s.alerter.Send(ctx, "incus/"+name, alerter.EventOOMKill,
+					fmt.Sprintf("OOM kill in Incus instance %s", name),
+					fmt.Sprintf("OOM kills increased from %d to %d in Incus instance %s.", prev, inst.OOMKills, name),
+				)
+			}
+			s.incus.previousOOMKills[name] = inst.OOMKills
+		}
+	}
+
 	s.incus.state.Metrics = metrics
 }

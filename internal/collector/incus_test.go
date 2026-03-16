@@ -9,12 +9,6 @@ import (
 // testMetrics is a trimmed-down version of real Incus /1.0/metrics output,
 // containing exactly the metrics needed to exercise all parsing paths.
 const testMetrics = `
-# HELP incus_instance_info Information about an instance.
-# TYPE incus_instance_info gauge
-incus_instance_info{name="homepage",project="default",status="Running",type="container"} 1
-incus_instance_info{name="dashboard-api",project="default",status="Running",type="container"} 1
-incus_instance_info{name="Home-Assistant-OS",project="default",status="Running",type="virtual-machine"} 1
-
 # HELP incus_boot_time_seconds The unix epoch at the time of the instance start.
 # TYPE incus_boot_time_seconds counter
 incus_boot_time_seconds{name="homepage",project="default",type="container"} 1773643523
@@ -449,9 +443,9 @@ func TestFilesystemVMPicksRoot(t *testing.T) {
 	// Test that for a VM with both "/" and "/mnt/data", the root is preferred
 	// even when it's smaller.
 	metrics := `
-# HELP incus_instance_info Information about an instance.
-# TYPE incus_instance_info gauge
-incus_instance_info{name="myvm",project="default",status="Running",type="virtual-machine"} 1
+# HELP incus_boot_time_seconds The unix epoch at the time of the instance start.
+# TYPE incus_boot_time_seconds counter
+incus_boot_time_seconds{name="myvm",project="default",type="virtual-machine"} 1773485340
 
 # HELP incus_filesystem_size_bytes The size of the filesystem in bytes.
 # TYPE incus_filesystem_size_bytes gauge

@@ -104,15 +104,17 @@ func parseIncusMetrics(r io.Reader) (*IncusMetrics, error) {
 
 	// --- Per-instance metrics ---
 
-	// Extract instance info (names, status, type).
-	if fam, ok := families["incus_instance_info"]; ok {
+	// Extract instance info (names, type).
+	// Since incus_instance_info was removed in recent Incus versions,
+	// we extract running instances from incus_boot_time_seconds.
+	if fam, ok := families["incus_boot_time_seconds"]; ok {
 		for _, m := range fam.GetMetric() {
 			name := labelValue(m, "name")
 			if name == "" {
 				continue
 			}
 			result.Instances[name] = &IncusInstance{
-				Status: labelValue(m, "status"),
+				Status: "Running",
 				Type:   labelValue(m, "type"),
 			}
 		}

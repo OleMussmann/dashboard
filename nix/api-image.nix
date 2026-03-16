@@ -17,12 +17,12 @@ let
   '';
 
   # Init script: obtain an IPv4 lease via DHCP, then exec the Go binary.
-  # udhcpc -n = exit if no lease obtained, -q = quit after obtaining lease,
+  # udhcpc -b = daemonize if lease not obtained, AND it automatically daemonizes after obtaining a lease.
   # -s = dispatcher script that configures the interface and resolv.conf.
   # -x hostname:$(hostname) = tell DHCP server our hostname so it goes into DNS
   init = writeText "init" ''
 #!/bin/sh
-/bin/udhcpc -i eth0 -n -q -s /etc/udhcpc.script -x hostname:$(/bin/hostname)
+/bin/udhcpc -b -i eth0 -s /etc/udhcpc.script -x hostname:$(/bin/hostname)
 exec /bin/dashboard-api
   '';
 in

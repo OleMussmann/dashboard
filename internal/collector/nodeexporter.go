@@ -21,6 +21,8 @@ type NixOSMetrics struct {
 	RAMUsedPercent   float64           `json:"ram_used_percent"`
 	DiskUsedPercent  float64           `json:"disk_used_percent"`
 	SMARTHealthy     bool              `json:"smart_healthy"`
+	SMARTStatus      string            `json:"smart_status"`
+	SMARTDisks       map[string]bool   `json:"smart_disks,omitempty"`
 	FailedServices   []string          `json:"failed_services"`
 	OOMKills         int64             `json:"oom_kills"`
 	RebootRequired   bool              `json:"reboot_required"`
@@ -62,6 +64,7 @@ func parseNodeExporterMetrics(r io.Reader, contentType string) (*NixOSMetrics, e
 
 	m := &NixOSMetrics{
 		SMARTHealthy: true, // default healthy until proven otherwise
+		SMARTStatus:  "OK",
 		Temperatures: make(map[string]float64),
 	}
 
@@ -69,7 +72,10 @@ func parseNodeExporterMetrics(r io.Reader, contentType string) (*NixOSMetrics, e
 	m.CPULoad1m = gaugeValue(families, "node_load1")
 	m.RAMUsedPercent = calcRAMPercent(families)
 	m.DiskUsedPercent = calcRootDiskPercent(families)
-	m.SMARTHealthy = calcSMARTHealth(families)
+	smart := calcSMARTHealth(families)
+	m.SMARTHealthy = smart.Healthy
+	m.SMARTStatus = smart.Status
+	m.SMARTDisks = smart.Disks
 	m.FailedServices = calcFailedServices(families)
 	m.OOMKills = int64(gaugeValue(families, "node_vmstat_oom_kill"))
 	m.RebootRequired = calcRebootRequired(families)
@@ -201,18 +207,46 @@ func calcRootDiskPercent(families map[string]*dto.MetricFamily) float64 {
 	return math.Round(pct*10) / 10
 }
 
-func calcSMARTHealth(families map[string]*dto.MetricFamily) bool {
-	// textfile metric: node_smart_healthy 1 = healthy, 0 = failing
+// smartResult holds per-disk SMART health and aggregate status.
+type smartResult struct {
+	Healthy bool
+	Status  string
+	Disks   map[string]bool // disk path -> healthy
+}
+
+func calcSMARTHealth(families map[string]*dto.MetricFamily) smartResult {
+	// textfile metric: node_smart_healthy{disk="/dev/sda"} 1 = healthy, 0 = failing
 	fam, ok := families["node_smart_healthy"]
 	if !ok {
-		return true // no SMART data means we assume healthy
+		return smartResult{Healthy: true, Status: "OK"} // no SMART data means we assume healthy
 	}
+
+	disks := make(map[string]bool)
+	allHealthy := true
+
 	for _, m := range fam.GetMetric() {
-		if m.GetGauge() != nil && m.GetGauge().GetValue() == 0 {
-			return false
+		disk := labelValue(m, "disk")
+		if m.GetGauge() != nil {
+			healthy := m.GetGauge().GetValue() != 0
+			if disk != "" {
+				disks[disk] = healthy
+			}
+			if !healthy {
+				allHealthy = false
+			}
 		}
 	}
-	return true
+
+	status := "OK"
+	if !allHealthy {
+		status = "FAILING"
+	}
+
+	return smartResult{
+		Healthy: allHealthy,
+		Status:  status,
+		Disks:   disks,
+	}
 }
 
 func calcFailedServices(families map[string]*dto.MetricFamily) []string {

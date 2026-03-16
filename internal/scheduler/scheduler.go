@@ -251,9 +251,19 @@ func (s *Scheduler) checkAlerts(ctx context.Context, t *machineTracker, m *colle
 
 	// SMART failure (all machines).
 	if rules.SMARTFailure && !m.SMARTHealthy {
+		var failingDisks []string
+		for disk, healthy := range m.SMARTDisks {
+			if !healthy {
+				failingDisks = append(failingDisks, disk)
+			}
+		}
+		detail := fmt.Sprintf("One or more disks on %s are reporting SMART failures.", hostname)
+		if len(failingDisks) > 0 {
+			detail = fmt.Sprintf("SMART failures on %s: %v", hostname, failingDisks)
+		}
 		s.alerter.Send(ctx, hostname, alerter.EventSMARTFailure,
 			fmt.Sprintf("SMART failure on %s", hostname),
-			fmt.Sprintf("One or more disks on %s are reporting SMART failures.", hostname),
+			detail,
 		)
 	}
 

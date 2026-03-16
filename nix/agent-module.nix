@@ -91,16 +91,21 @@ in
           Type = "oneshot";
           ExecStart = pkgs.writeShellScript "smart-check" ''
             OUTPUT="${cfg.textfileDir}/smart.prom"
-            echo "# HELP node_smart_healthy SMART health status (1=healthy, 0=failing)" > "$OUTPUT.tmp"
+            echo "# HELP node_smart_healthy SMART health status per disk (1=healthy, 0=failing)" > "$OUTPUT.tmp"
             echo "# TYPE node_smart_healthy gauge" >> "$OUTPUT.tmp"
-            healthy=1
             for disk in $(${pkgs.util-linux}/bin/lsblk -dnp -o NAME,TYPE | ${pkgs.gawk}/bin/awk '$2=="disk"{print $1}'); do
-              result=$(${pkgs.smartmontools}/bin/smartctl -H "$disk" 2>/dev/null | grep -c "PASSED" || true)
-              if [ "$result" -eq 0 ]; then
-                healthy=0
+              output=$(${pkgs.smartmontools}/bin/smartctl -H "$disk" 2>&1) || true
+              # Skip devices smartctl cannot interrogate (USB bridges, etc.).
+              if echo "$output" | ${pkgs.gnugrep}/bin/grep -qE "Unknown USB bridge|Please specify device type|Unable to detect device type"; then
+                continue
+              fi
+              # ATA/NVMe report "PASSED"; SCSI/SAS/virtual disks report "SMART Health Status: OK".
+              if echo "$output" | ${pkgs.gnugrep}/bin/grep -qE "PASSED|SMART Health Status: OK"; then
+                echo "node_smart_healthy{disk=\"$disk\"} 1" >> "$OUTPUT.tmp"
+              else
+                echo "node_smart_healthy{disk=\"$disk\"} 0" >> "$OUTPUT.tmp"
               fi
             done
-            echo "node_smart_healthy $healthy" >> "$OUTPUT.tmp"
             mv "$OUTPUT.tmp" "$OUTPUT"
           '';
         };
